@@ -1,27 +1,27 @@
 # Voice AI Agent — Patient Registration
 
-A dialable phone number + REST API that conversationally registers U.S. patients and persists their demographic data. Built with FastAPI, SQLAlchemy, SQLite, and Vapi.
+A dialable phone number + REST API that conversationally registers U.S. patients and persists their demographic data. Built with FastAPI, SQLAlchemy, PostgreSQL, and Vapi.
 
 ## Live Demo
 
-- **Phone number:** [FILL IN after Vapi provisioning]
-- **API base URL:** [FILL IN after deployment, e.g. https://your-app.up.railway.app]
-- **Repo:** [FILL IN your GitHub URL]
+- **Phone number:** +1 (207) 559-2161
+- **API base URL:** https://patient-registration-voice-agent-1.onrender.com
+- **Repo:** https://github.com/furqanx11/patient-registration-voice-agent
 
 ## Architecture
 
 ```
 Caller ↔ Vapi (telephony + STT/TTS + GPT-4o orchestration)
               ↕ (function calls + webhooks, HTTPS/JSON)
-         FastAPI backend ↔ SQLite (patients.db)
+         FastAPI backend ↔ PostgreSQL (Render Postgres)
               ↕
          REST API (same service, for external querying)
 ```
 
-- **Telephony + Voice AI:** Vapi. It abstracts telephony, STT, and TTS so the focus stays on conversation design, backend correctness, and error handling — the right trade-off under a 3-hour constraint.
+- **Telephony + Voice AI:** Vapi. It abstracts telephony, STT, and TTS so the focus stays on conversation design, backend correctness, and error handling.
 - **LLM:** GPT-4o via Vapi's model integration, chosen for strong conversational quality and reliable function calling.
 - **Backend:** Python + FastAPI (async), with Pydantic for server-side validation.
-- **Database:** SQLite (file-backed, survives restarts). SQLAlchemy is used so migrating to Postgres later only requires changing `DATABASE_URL`.
+- **Database:** PostgreSQL via Render Postgres. SQLAlchemy is used as the ORM, so the database layer is portable.
 - **Call logging:** Every call webhook from Vapi is stored in `call_logs` and linked to an existing patient by phone number when possible.
 
 ## Project Structure
@@ -62,23 +62,21 @@ The design follows OOP and DRY:
    cp .env.example .env
    ```
 
-2. **Run the server:**
+2. **Run the server locally:**
    ```bash
    uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
    ```
-   On first run, `patients.db` is created and seeded with one demo patient (Jane Doe).
+   Local development defaults to SQLite (`patients.db`).
 
-3. **Expose it:**
+3. **Expose it for local testing:**
    - Quick local test: `ngrok http 8000` and use the ngrok HTTPS URL.
-   - Production: deploy the Docker image (see below).
+   - Update the `BACKEND_URL` in your `.env` to the ngrok URL.
 
 4. **Configure Vapi:**
    - Create an account and provision a phone number.
    - Import `vapi_assistant_config.json` (or paste the system prompt and recreate the three tools).
    - Replace every `https://YOUR_BACKEND_URL` placeholder with your deployed/ngrok URL.
    - Set `serverUrl` to `https://YOUR_BACKEND_URL/calls/webhook/vapi` so Vapi can post call transcripts.
-   - Set `serverUrlSecret` to a random string and configure it in Vapi if you want webhook verification (verification not implemented in this base version; see Next Steps).
-   - Add your OpenAI and ElevenLabs API keys in Vapi's dashboard.
 
 5. **Call the number** and register a patient. Call again with the same phone number to confirm duplicate detection and persistence.
 
@@ -86,8 +84,8 @@ The design follows OOP and DRY:
 
 | Variable | Purpose | Required |
 |---|---|---|
-| `DATABASE_URL` | SQLAlchemy connection string. Defaults to `sqlite:///./patients.db`. | No |
-| `BACKEND_URL` | Used only for rendering README/Vapi placeholders. | No |
+| `DATABASE_URL` | SQLAlchemy connection string. Use `postgresql://...` for production (Render Postgres) or `sqlite:///./patients.db` for local dev. | No |
+| `BACKEND_URL` | Used for rendering README/Vapi placeholders. | No |
 | `LOG_LEVEL` | Logging level. Default `INFO`. | No |
 | `ENVIRONMENT` | `development` or `production`. Enables SQLAlchemy echo in dev. | No |
 
@@ -96,6 +94,8 @@ No LLM/telephony API keys live in this repo — those are configured in the Vapi
 ## API Reference
 
 All responses use the envelope `{ "data": ..., "error": ... }`.
+
+Base URL: `https://patient-registration-voice-agent-1.onrender.com`
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -121,47 +121,41 @@ Tests cover patient CRUD, validation, duplicate detection, soft deletes, and Vap
 
 ## Deployment
 
-### Option 1: Railway (recommended for simplicity)
+### Deployed on Render
 
-Railway has a free tier and supports persistent disks. Steps:
+This app is deployed on Render using:
+
+- **Render Web Service** running the Docker image from the included `Dockerfile`.
+- **Render Postgres** for the database.
+- Environment variables set in the Render dashboard:
+  - `DATABASE_URL` → Internal Database URL from Render Postgres
+  - `ENVIRONMENT` → `production`
+
+### Render Deployment Steps (for reference)
+
 1. Push this repo to GitHub.
-2. Create a Railway project from the GitHub repo.
-3. Add a **persistent volume** mounted at `/app` so `patients.db` survives deploys.
-4. Set the start command: `uvicorn src.main:app --host 0.0.0.0 --port 8000`.
-5. Railway gives you a public HTTPS URL; paste it into Vapi.
+2. In Render, create a new **Web Service** and connect the GitHub repo.
+3. Select **Docker** as the runtime.
+4. Set the environment variables above.
+5. Create a **Render Postgres** database and copy its **Internal Database URL** into `DATABASE_URL`.
+6. Render gives you a public HTTPS URL; paste it into Vapi.
 
-### Option 2: Render
-
-Render also has persistent disks on paid plans. Use the included Dockerfile as the build/run source and add a disk mount at `/app`.
-
-### Option 3: Fly.io
-
-Fly.io has volumes:
-```bash
-fly launch
-fly volumes create patient_data --size 1 --region iad
-fly deploy
-```
-Mount the volume at `/app` in `fly.toml` so the SQLite file persists.
-
-### Option 4: Docker (anywhere)
+### Docker (anywhere)
 
 ```bash
 docker build -t patient-registration .
-docker run -p 8000:8000 -v $(pwd)/data:/app/data patient-registration
+docker run -d -p 8000:8000 -e ENVIRONMENT=production patient-registration
 ```
 
-Use a volume (`-v`) so the SQLite file is not lost when the container restarts. For production with real traffic, the best next step is to swap SQLite for a managed Postgres (Neon, Supabase, Railway Postgres, etc.) by changing `DATABASE_URL`.
+For local Docker with SQLite persistence:
 
-### Recommendation
-
-For this assessment, **Railway + a persistent disk** is the fastest path to a live, callable number. If you want zero persistence concerns, use **Railway Postgres** instead of SQLite.
+```bash
+docker run -d -p 8000:8000 -v $(pwd)/data:/app/data -e DATABASE_URL=sqlite:///./data/patients.db patient-registration
+```
 
 ## Known Limitations / Trade-offs
 
-- **SQLite** instead of Postgres — fine for assessment scale; use a persistent disk or switch to Postgres for real traffic.
 - **No authentication** on the API — acceptable for a technical assessment holding no real patient data, not acceptable for production.
-- **Webhook verification** is not implemented. Vapi signs webhooks with `serverUrlSecret`, but this version does not verify the signature. Add HMAC verification before accepting production traffic.
 - **Voice-side robustness** (interruptions, heavy accents, multi-language) depends on Vapi/GPT-4o's built-in handling; not independently hardened beyond the system prompt.
 - **Appointment scheduling, multi-language switching, and a web dashboard** were treated as bonus/stretch and are not implemented in the base submission.
 - **Basic input sanitization** is handled through Pydantic validation; no additional rate-limiting or abuse protection has been added.
@@ -172,4 +166,4 @@ For this assessment, **Railway + a persistent disk** is the fastest path to a li
 - Add a minimal read-only dashboard (simple HTML table view) over `GET /patients`.
 - Add more granular observability (structured JSON logs, request IDs).
 - Add automated integration tests for the full voice flow using mocked Vapi payloads.
-- Migrate to Postgres with Alembic migrations for schema versioning.
+- Add Alembic migrations for schema versioning.
