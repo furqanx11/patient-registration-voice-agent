@@ -1,0 +1,106 @@
+{
+  "name": "Patient Registration Agent",
+  "model": {
+    "provider": "openai",
+    "model": "gpt-4o",
+    "temperature": 0.4,
+    "systemPrompt": "You are Alex, a warm and efficient patient intake coordinator for a healthcare clinic, speaking with callers over the phone. Your job is to register new patients or update existing ones through natural conversation — never a rigid menu. The clinic automatically saves a call transcript after the call ends, so you do not need to ask about that.\n\nCONVERSATION FLOW:\n1. Greet the caller warmly and ask how you can help / confirm they're calling to register.\n2. Ask for their phone number early, then call the lookup_patient_by_phone tool. If a match is found, tell them: \"It looks like we already have a record for [First Name] [Last Name]. Would you like to update your information instead?\" and proceed accordingly (use update_patient rather than create_patient if they confirm).\n3. If no match, proceed to collect REQUIRED fields conversationally, in a natural order, not a checklist: first name, last name, date of birth, sex, phone number (if not already given), address (street, city, state, zip). Ask one or two related things at a time, not all fields in one breath.\n4. After required fields are collected, ask: \"I can also collect your insurance information, emergency contact, and preferred language. Would you like to provide any of those?\" Only collect optional fields (insurance_provider, insurance_member_id, preferred_language, emergency_contact_name, emergency_contact_phone) if the caller opts in.\n5. VALIDATION: If the caller gives an invalid value (e.g., a phone number that isn't 10 digits, a date of birth in the future, a state that isn't a real 2-letter US abbreviation, a malformed ZIP), do not silently accept it — re-prompt specifically for that field only, e.g. \"That date doesn't look right — could you give me your date of birth again?\"\n6. CORRECTIONS: If the caller corrects something mid-conversation (e.g., \"actually my last name is spelled D-A-V-I-S, not D-A-V-I-E-S\"), update that field only and continue — don't restart the whole conversation.\n7. CONFIRMATION: Before saving, read back ALL collected information clearly and ask the caller to confirm or correct any field. Do not save until they confirm.\n8. SAVE: Once confirmed, call create_patient (or update_patient if this is a returning caller). Relay the outcome: if successful, say something like \"You're all set, [First Name]. Thanks for calling!\" and end the call gracefully. If the save fails, apologize, tell them there was a technical issue, and offer to try again or have someone call them back — never leave them in silence.\n9. If the caller wants to start over at any point, acknowledge it and restart data collection from scratch without saving partial data.\n\nTONE: Sound like a helpful, patient human intake coordinator — not robotic. Keep responses concise since this is a voice conversation, not a chat window. Never read out technical field names (e.g., say 'date of birth', not 'date_of_birth').",
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "lookup_patient_by_phone",
+          "description": "Call this FIRST after the caller gives their phone number. It checks whether an existing patient is already on file so you can offer to update their record instead of creating a duplicate. Pass the phone number as exactly 10 digits with no spaces, dashes, parentheses, or country code (e.g. 5551234567, not (555) 123-4567 or +1 555-123-4567). If a record is found, the tool returns the patient's data including their patient_id, first_name, and last_name.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "phone_number": {
+                "type": "string",
+                "description": "10-digit US phone number, digits only. Example: 5551234567"
+              }
+            },
+            "required": ["phone_number"]
+          }
+        },
+        "server": {
+          "url": "https://YOUR_BACKEND_URL/tools/lookup-by-phone",
+          "method": "POST"
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "create_patient",
+          "description": "Create a new patient record. ONLY call this AFTER the caller has confirmed all collected information is correct. Required fields must be collected first: first_name, last_name, date_of_birth, sex, phone_number, address_line_1, city, state, zip_code. Optional fields (email, address_line_2, insurance_provider, insurance_member_id, preferred_language, emergency_contact_name, emergency_contact_phone) should only be included if the caller explicitly provided them. If any value is invalid, the backend will reject the call and you should re-prompt for that specific field.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "first_name": { "type": "string", "description": "First name only. Example: Jane" },
+              "last_name": { "type": "string", "description": "Last name only. Example: Doe" },
+              "date_of_birth": { "type": "string", "description": "Format YYYY-MM-DD. Example: 1990-05-14" },
+              "sex": { "type": "string", "enum": ["Male", "Female", "Other", "Decline to Answer"], "description": "Use exactly one of the four allowed values." },
+              "phone_number": { "type": "string", "description": "10 digits only, no formatting. Example: 5551234567" },
+              "email": { "type": "string", "description": "Optional. Full email address if provided. Example: jane.doe@example.com" },
+              "address_line_1": { "type": "string", "description": "Street address. Example: 123 Main St" },
+              "address_line_2": { "type": "string", "description": "Optional. Apt, suite, unit. Example: Apt 4B" },
+              "city": { "type": "string", "description": "City name. Example: Austin" },
+              "state": { "type": "string", "description": "2-letter US state abbreviation, uppercase. Example: TX" },
+              "zip_code": { "type": "string", "description": "5-digit ZIP or ZIP+4. Examples: 78701 or 78701-1234" },
+              "insurance_provider": { "type": "string", "description": "Optional. Insurance company name." },
+              "insurance_member_id": { "type": "string", "description": "Optional. Insurance member or subscriber ID." },
+              "preferred_language": { "type": "string", "description": "Optional. Defaults to English if not provided. Example: Spanish" },
+              "emergency_contact_name": { "type": "string", "description": "Optional. Full name of emergency contact. Example: John Doe" },
+              "emergency_contact_phone": { "type": "string", "description": "Optional. 10 digits only. Example: 5559876543" }
+            },
+            "required": ["first_name", "last_name", "date_of_birth", "sex", "phone_number", "address_line_1", "city", "state", "zip_code"]
+          }
+        },
+        "server": {
+          "url": "https://YOUR_BACKEND_URL/patients",
+          "method": "POST"
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "update_patient",
+          "description": "Update an existing patient record. Call this when a returning caller confirms they want to change their information, OR when a caller corrects a value mid-conversation. You MUST include the patient_id returned by lookup_patient_by_phone. Only include the fields that are being changed or corrected; omit the rest. After a successful update, confirm the change to the caller and continue.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "patient_id": { "type": "string", "description": "The UUID returned by lookup_patient_by_phone. Example: 62b98d4b-63f8-4a5c-8386-5a6c05300884" },
+              "first_name": { "type": "string", "description": "Only include if changing. Example: Jane" },
+              "last_name": { "type": "string", "description": "Only include if changing. Example: Doe" },
+              "date_of_birth": { "type": "string", "description": "Only include if changing. Format YYYY-MM-DD. Example: 1990-05-14" },
+              "sex": { "type": "string", "description": "Only include if changing. Must be Male, Female, Other, or Decline to Answer." },
+              "phone_number": { "type": "string", "description": "Only include if changing. 10 digits only. Example: 5551234567" },
+              "email": { "type": "string", "description": "Only include if changing. Example: jane.doe@example.com" },
+              "address_line_1": { "type": "string", "description": "Only include if changing. Example: 123 Main St" },
+              "address_line_2": { "type": "string", "description": "Only include if changing or clearing. Example: Apt 4B" },
+              "city": { "type": "string", "description": "Only include if changing. Example: Austin" },
+              "state": { "type": "string", "description": "Only include if changing. 2-letter uppercase abbreviation. Example: TX" },
+              "zip_code": { "type": "string", "description": "Only include if changing. Example: 78701" },
+              "insurance_provider": { "type": "string", "description": "Only include if changing or adding." },
+              "insurance_member_id": { "type": "string", "description": "Only include if changing or adding." },
+              "preferred_language": { "type": "string", "description": "Only include if changing. Example: Spanish" },
+              "emergency_contact_name": { "type": "string", "description": "Only include if changing or adding. Example: John Doe" },
+              "emergency_contact_phone": { "type": "string", "description": "Only include if changing or adding. 10 digits only. Example: 5559876543" }
+            },
+            "required": ["patient_id"]
+          }
+        },
+        "server": {
+          "url": "https://YOUR_BACKEND_URL/tools/update-patient",
+          "method": "POST"
+        }
+      }
+    ]
+  },
+  "voice": {
+    "provider": "11labs",
+    "voiceId": "rachel"
+  },
+  "firstMessage": "Hi, thanks for calling — this is Alex, your patient registration assistant. Can I get your phone number to get started, or is this your first time calling in?",
+  "serverUrl": "https://YOUR_BACKEND_URL/calls/webhook/vapi",
+  "serverUrlSecret": "YOUR_WEBHOOK_SECRET"
+}

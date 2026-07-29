@@ -10,7 +10,6 @@
 *.coverage
 venv/*
 .env
-*.json
 !data/brand_aliases.json
 !data/brand_registry.json
 .venv/*
