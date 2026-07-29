@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.patients.db
+patients.db
+*.db
+.pytest_cache/
+.git/
+.gitignore
+README.md
+Dockerfile
+.dockerignore

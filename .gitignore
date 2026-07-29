@@ -1,0 +1,17 @@
+*.pyc
+*/__pycache__/*
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.egg-info
+*.egg
+*.log
+*.coverage
+venv/*
+.env
+*.json
+!data/brand_aliases.json
+!data/brand_registry.json
+.venv/*
+patients.db
